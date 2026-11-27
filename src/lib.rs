@@ -7,6 +7,7 @@
 
 pub mod arch;
 pub mod checkpoint;
+pub mod cuda;
 pub mod corpus;
 pub mod data;
 pub mod distributed;

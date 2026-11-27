@@ -1,6 +1,6 @@
 //! Loss functions composed from differentiable tensor ops.
 
-use crate::tensor::{cross_entropy, Tensor};
+use crate::tensor::Tensor;
 
 pub use crate::tensor::cross_entropy as ce;
 
