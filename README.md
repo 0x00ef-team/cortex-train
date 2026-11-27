@@ -72,9 +72,24 @@ cargo test
 `rms_norm`, MSE/BCE, dataset/loader behavior, all three optimizers and a
 checkpoint round-trip.
 
+## CUDA backward
+
+`src/cuda.rs` is a dependency-free CUDA driver/NVRTC layer. Run:
+
+```bash
+cargo run --release --example cuda_train
+# step  40 loss 0.306073
+# step 200 loss 0.000000
+```
+
+It trains `y = W·x` entirely on device with compiled backward kernels. This is
+the foundation for the full transformer CUDA autograd; softmax/attention
+backward kernels are still to come.
+
 ## Roadmap
 
-- [ ] CUDA autograd backend (reuse `cortex` CUDA kernels for forward/backward)
+- [x] CUDA device layer: NVRTC kernels for matmul forward/backward, MSE
+      forward/backward and AdamW; `examples/cuda_train` trains a layer on GPU
 - [ ] GGUF export so trained weights can be loaded directly by `cortex`
 - [x] MSE/BCE, SGD/RMSProp, data loaders, checkpoint save/load
 - [ ] CUDA autograd backend is still future work
