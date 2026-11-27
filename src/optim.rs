@@ -46,3 +46,59 @@ impl AdamW {
         }
     }
 }
+
+/// Plain SGD with optional momentum.
+pub struct SGD {
+    params: Vec<Tensor>,
+    velocity: Vec<Vec<f32>>,
+    lr: f32,
+    momentum: f32,
+}
+
+impl SGD {
+    pub fn new(params: Vec<Tensor>, lr: f32) -> Self {
+        let velocity = params.iter().map(|p| vec![0.0; p.data.borrow().len()]).collect();
+        Self { params, velocity, lr, momentum: 0.0 }
+    }
+    pub fn with_momentum(mut self, m: f32) -> Self { self.momentum = m; self }
+    pub fn zero_grad(&self) { zero_grad_all(&self.params); }
+    pub fn step(&mut self) {
+        for i in 0..self.params.len() {
+            let g = self.params[i].grad();
+            let mut p = self.params[i].data.borrow_mut();
+            for j in 0..p.v.len() {
+                self.velocity[i][j] = self.momentum * self.velocity[i][j] - self.lr * g[j];
+                p.v[j] += self.velocity[i][j];
+                p.grad[j] = 0.0;
+            }
+        }
+    }
+}
+
+/// RMSProp optimizer.
+pub struct RMSProp {
+    params: Vec<Tensor>,
+    avg: Vec<Vec<f32>>,
+    lr: f32,
+    beta: f32,
+    eps: f32,
+}
+
+impl RMSProp {
+    pub fn new(params: Vec<Tensor>, lr: f32) -> Self {
+        let avg = params.iter().map(|p| vec![0.0; p.data.borrow().len()]).collect();
+        Self { params, avg, lr, beta: 0.9, eps: 1e-8 }
+    }
+    pub fn zero_grad(&self) { zero_grad_all(&self.params); }
+    pub fn step(&mut self) {
+        for i in 0..self.params.len() {
+            let g = self.params[i].grad();
+            let mut p = self.params[i].data.borrow_mut();
+            for j in 0..p.v.len() {
+                self.avg[i][j] = self.beta * self.avg[i][j] + (1.0 - self.beta) * g[j] * g[j];
+                p.v[j] -= self.lr * g[j] / (self.avg[i][j].sqrt() + self.eps);
+                p.grad[j] = 0.0;
+            }
+        }
+    }
+}

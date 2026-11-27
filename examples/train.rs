@@ -4,7 +4,7 @@
 //! layers, heads, hidden, seed)` creates any architecture, and the training
 //! loop only uses generic `loss.backward()` + `optimizer.step()`.
 
-use cortex_train::{AdamW, Transformer};
+use cortex_train::{checkpoint, AdamW, Transformer};
 use std::collections::HashMap;
 
 const TEXT: &str = "the quick brown fox jumps over the lazy dog. \
@@ -49,6 +49,11 @@ fn main() {
     let out = model.generate_sample(&prompt, 160, 0.8, 777);
     let text: String = out.iter().map(|&i| itos[i]).collect();
     println!("\n--- generated ---\n{text}");
+
+    let path = std::env::temp_dir().join("cortex-train-demo.ctrk");
+    checkpoint::save(&path, &model.named_params()).expect("save checkpoint");
+    let restored = checkpoint::load(&path).expect("load checkpoint");
+    println!("checkpoint: {} tensors at {}", restored.len(), path.display());
 
     // Sanity: the model must produce logits of the expected shape.
     let logits = model.forward(&prompt);

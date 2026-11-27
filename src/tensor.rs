@@ -448,6 +448,34 @@ impl Tensor {
         out
     }
 
+    pub fn sigmoid(&self) -> Tensor {
+        let v: Vec<f32> = self.data.borrow().v.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
+        let mut out = Tensor::new(v, &self.shape());
+        out.requires_grad = self.requires_grad;
+        if out.requires_grad {
+            let y = out.data.clone();
+            out.record(vec![self.clone()], move |dy, grads| {
+                let yv = y.borrow();
+                for (i, d) in dy.iter().enumerate() { grads[0][i] += d * yv.v[i] * (1.0 - yv.v[i]); }
+            });
+        }
+        out
+    }
+
+    pub fn log(&self) -> Tensor {
+        let v: Vec<f32> = self.data.borrow().v.iter().map(|x| x.ln()).collect();
+        let mut out = Tensor::new(v, &self.shape());
+        out.requires_grad = self.requires_grad;
+        if out.requires_grad {
+            let src = flat(self);
+            out.record(vec![self.clone()], move |dy, grads| {
+                let s = src.borrow();
+                for (i, d) in dy.iter().enumerate() { grads[0][i] += d / s.v[i]; }
+            });
+        }
+        out
+    }
+
     pub fn tanh(&self) -> Tensor {
         let v: Vec<f32> = self.data.borrow().v.iter().map(|x| x.tanh()).collect();
         let mut out = Tensor::new(v, &self.shape());

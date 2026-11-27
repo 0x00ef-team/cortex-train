@@ -188,6 +188,36 @@ impl Transformer {
         p
     }
 
+    /// Parameters with stable names, for checkpoints and optimizers.
+    pub fn named_params(&self) -> Vec<(String, Tensor)> {
+        let mut out = Vec::new();
+        out.push(("embed.weight".into(), self.embed.weight.clone()));
+        out.push(("pos.weight".into(), self.pos.weight.clone()));
+        for (i, b) in self.blocks.iter().enumerate() {
+            let p = |n: &str| format!("blocks.{i}.{n}");
+            out.push((p("attn_norm"), b.attn_norm.weight.clone()));
+            out.push((p("wq.weight"), b.attn.wq.weight.clone()));
+            out.push((p("wq.bias"), b.attn.wq.bias.clone().unwrap()));
+            out.push((p("wk.weight"), b.attn.wk.weight.clone()));
+            out.push((p("wk.bias"), b.attn.wk.bias.clone().unwrap()));
+            out.push((p("wv.weight"), b.attn.wv.weight.clone()));
+            out.push((p("wv.bias"), b.attn.wv.bias.clone().unwrap()));
+            out.push((p("wo.weight"), b.attn.wo.weight.clone()));
+            out.push((p("wo.bias"), b.attn.wo.bias.clone().unwrap()));
+            out.push((p("ffn_norm"), b.ffn_norm.weight.clone()));
+            out.push((p("gate.weight"), b.gate.weight.clone()));
+            out.push((p("gate.bias"), b.gate.bias.clone().unwrap()));
+            out.push((p("up.weight"), b.up.weight.clone()));
+            out.push((p("up.bias"), b.up.bias.clone().unwrap()));
+            out.push((p("down.weight"), b.down.weight.clone()));
+            out.push((p("down.bias"), b.down.bias.clone().unwrap()));
+        }
+        out.push(("final_norm".into(), self.final_norm.weight.clone()));
+        out.push(("head.weight".into(), self.head.weight.clone()));
+        out.push(("head.bias".into(), self.head.bias.clone().unwrap()));
+        out
+    }
+
     /// Temperature sampling with a deterministic xorshift RNG.
     pub fn generate_sample(&self, prompt: &[usize], steps: usize, temperature: f32, seed: u64) -> Vec<usize> {
         let mut ids = prompt.to_vec();

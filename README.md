@@ -19,7 +19,10 @@ This repository is attached to `cortex-llm` as a git submodule at
 - Modules: `Linear`, `Embedding`, `RMSNorm`, `CausalAttention`,
   `TransformerBlock`, `Transformer` (decoder-only, any vocab / dim / layers /
   heads / hidden size).
-- Optimizer: AdamW with decoupled weight decay.
+- Losses: cross-entropy, MSE, binary cross-entropy.
+- Optimizers: AdamW (decoupled weight decay), SGD+momentum, RMSProp.
+- Data: `Dataset` (next-token windows), `DataLoader` (deterministic shuffling).
+- Checkpoints: named tensor save/load (`CTRK1` binary format).
 - Greedy and temperature sampling.
 
 ## Create and train any model
@@ -65,15 +68,16 @@ different model.
 cargo test
 ```
 
-Gradient checks against finite differences cover `matmul`, `cross_entropy`
-and `rms_norm`.
+7 tests: finite-difference gradient checks for `matmul`, `cross_entropy`,
+`rms_norm`, MSE/BCE, dataset/loader behavior, all three optimizers and a
+checkpoint round-trip.
 
 ## Roadmap
 
 - [ ] CUDA autograd backend (reuse `cortex` CUDA kernels for forward/backward)
 - [ ] GGUF export so trained weights can be loaded directly by `cortex`
-- [ ] More losses (MSE, BCE), optimizers (SGD, RMSProp), data loaders
-- [ ] Checkpoint save/load
+- [x] MSE/BCE, SGD/RMSProp, data loaders, checkpoint save/load
+- [ ] CUDA autograd backend is still future work
 
 ## License
 
@@ -98,7 +102,10 @@ MIT OR Apache-2.0.
   `rms_norm`, `cross_entropy`, `backward()`.
 - Модули: `Linear`, `Embedding`, `RMSNorm`, `CausalAttention`,
   `TransformerBlock`, `Transformer` — любой словарь/размерность/слои/головы.
-- Оптимизатор AdamW с decoupled weight decay.
+- Функции потерь: cross-entropy, MSE, BCE.
+- Оптимизаторы: AdamW, SGD+momentum, RMSProp.
+- Данные: `Dataset` (окна next-token), `DataLoader` (детерминированный shuffle).
+- Чекпоинты: именованные тензоры в бинарном формате `CTRK1`.
 - Greedy и temperature-сэмплинг.
 
 ### Пример
@@ -117,7 +124,8 @@ cargo run --release --example train
 cargo test
 ```
 
-Градиенты `matmul`, `cross_entropy` и `rms_norm` сверены с конечными разностями.
+7 тестов: градиенты `matmul`, `cross_entropy`, `rms_norm`, MSE/BCE, работа
+`Dataset`/`DataLoader`, все три оптимизатора и round-trip чекпоинта.
 
 ### Планы
 
