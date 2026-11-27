@@ -459,6 +459,18 @@ extern "C" __global__ void attn_scores(
     scores[idx]=sum*scale;
 }
 
+
+extern "C" __global__ void merge_heads_rev(
+    const float* __restrict__ x, float* __restrict__ out,
+    int b, int h, int s, int d)
+{
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    int total=b*s*h*d;
+    if (idx>=total) return;
+    int bi=idx/(s*h*d), i=(idx/(h*d))%s, hh=(idx/d)%h, j=idx%d;
+    out[((bi*h+hh)*s+i)*d+j]=x[idx];
+}
+
 extern "C" __global__ void adamw_step(
     float* __restrict__ p, float* __restrict__ g,
     float* __restrict__ m, float* __restrict__ v,
@@ -514,7 +526,7 @@ struct Api {
     softmax_fwd: u64, softmax_bwd: u64, causal_softmax: u64,
     rms_fwd: u64, rms_bwd: u64,
     emb_fwd: u64, emb_bwd: u64, add_fwd: u64, head_split: u64,
-    transpose3: u64, split_heads_rev: u64, mul_fwd: u64, mul_bwd: u64, add_into: u64, scores: u64,
+    transpose3: u64, split_heads_rev: u64, merge_heads_rev: u64, mul_fwd: u64, mul_bwd: u64, add_into: u64, scores: u64,
 }
 
 pub struct Cuda {
@@ -608,6 +620,7 @@ impl Cuda {
                 head_split: fn_handle("head_split")?,
                 transpose3: fn_handle("transpose3")?,
                 split_heads_rev: fn_handle("split_heads_rev")?,
+                merge_heads_rev: fn_handle("merge_heads_rev")?,
                 mul_fwd: fn_handle("mul_fwd")?,
                 mul_bwd: fn_handle("mul_bwd")?,
                 add_into: fn_handle("add_into")?,
@@ -933,5 +946,11 @@ impl Cuda {
         let mut p:[*mut c_void;7]=[&q.ptr as *const u64 as *mut c_void,&kt.ptr as *const u64 as *mut c_void,&scores.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&ss as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void,&scale as *const f32 as *mut c_void];
         launch(&self.api,self.api.scores,(batches*s*s).div_ceil(256) as u32,256,&mut p)
     }
+    pub fn merge_heads_rev(&self,x:&DeviceTensor,out:&DeviceTensor,b:usize,h:usize,s:usize,d:usize) -> std::result::Result<(),Error> {
+        let (bb,hh,ss,dd)=(b as i32,h as i32,s as i32,d as i32);
+        let mut p:[*mut c_void;6]=[&x.ptr as *const u64 as *mut c_void,&out.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&hh as *const i32 as *mut c_void,&ss as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+        launch(&self.api,self.api.merge_heads_rev,(b*s*h*d).div_ceil(256) as u32,256,&mut p)
+    }
+
 }
 

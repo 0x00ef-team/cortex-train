@@ -87,7 +87,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         dev.attn_scores(&qh, &kt, &scores, bh, s, dh, scale)?;
         dev.causal_softmax(&scores, &probs, bh*s, s)?;
         dev.matmul3_fwd(&probs, &vh, &o, bh, s, s, dh)?;
-        dev.split_heads_rev(&o, &oh, b, h, s, dh)?;
+        dev.split_heads(&o, &oh, b, h, s, dh)?;
         dev.matmul_batch_fwd(&wo, &oh, &x1, n, d, d)?;
         dev.add(&x, &x1, &x1, n*d)?;
 
@@ -119,14 +119,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         dev.add_into(&dx1, &dx2, n*d)?;
 
         dev.matmul_batch_bwd(&wo, &oh, &dx1, &d_wo, &do2, n, d, d)?;
-        dev.split_heads_rev(&do2, &do_h, b, h, s, dh)?;
+        dev.merge_heads_rev(&do2, &do_h, b, h, s, dh)?;
         dev.matmul3_bwd(&probs, &vh, &do_h, &dprobs, &dvh, bh, s, s, dh)?;
         dev.softmax_rows(&probs, &dprobs, bh*s, s, true, Some(&dprobs), Some(&dscores))?;
         dev.matmul3_bwd(&qh, &kt, &dscores, &dqh, &dkt, bh, s, dh, s)?;
         dev.transpose3(&dkt, &dkh, bh, dh, s)?;
-        dev.split_heads_rev(&dqh, &dq, b, h, s, dh)?;
-        dev.split_heads_rev(&dkh, &dk, b, h, s, dh)?;
-        dev.split_heads_rev(&dvh, &dv, b, h, s, dh)?;
+        dev.split_heads(&dqh, &dq, b, h, s, dh)?;
+        dev.split_heads(&dkh, &dk, b, h, s, dh)?;
+        dev.split_heads(&dvh, &dv, b, h, s, dh)?;
         dev.matmul_batch_bwd(&wq, &xn1, &dq, &d_wq, &dxn1, n, d, d)?;
         dev.matmul_batch_bwd(&wk, &xn1, &dk, &d_wk, &dxn1k, n, d, d)?;
         dev.matmul_batch_bwd(&wv, &xn1, &dv, &d_wv, &dxn1v, n, d, d)?;

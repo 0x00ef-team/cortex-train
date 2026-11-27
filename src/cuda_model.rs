@@ -178,7 +178,7 @@ impl GpuTransformer {
             self.dev.attn_scores(&l.qh, &l.kt, &l.scores, bh, s, dh, scale)?;
             self.dev.causal_softmax(&l.scores, &l.probs, bh*s, s)?;
             self.dev.matmul3_fwd(&l.probs, &l.vh, &l.o, bh, s, s, dh)?;
-            self.dev.split_heads_rev(&l.o, &l.oh, self.cfg.batch, h, s, dh)?;
+            self.dev.split_heads(&l.o, &l.oh, self.cfg.batch, h, s, dh)?;
             self.dev.matmul_batch_fwd(&l.wo, &l.oh, &l.dx1, n, d, d)?;
             self.dev.add(prev, &l.dx1, &l.a1, n*d)?;
 
@@ -226,14 +226,14 @@ impl GpuTransformer {
             self.dev.add_into(&l.dx1, &self.dxf, n*d)?;
 
             self.dev.matmul_batch_bwd(&l.wo, &l.oh, &l.dx1, &l.dwo, &l.do2, n, d, d)?;
-            self.dev.split_heads_rev(&l.do2, &l.do_h, self.cfg.batch, h, s, dh)?;
+            self.dev.merge_heads_rev(&l.do2, &l.do_h, self.cfg.batch, h, s, dh)?;
             self.dev.matmul3_bwd(&l.probs, &l.vh, &l.do_h, &l.dprobs, &l.dvh, bh, s, s, dh)?;
             self.dev.softmax_rows(&l.probs, &l.dprobs, bh*s, s, true, Some(&l.dprobs), Some(&l.dscores))?;
             self.dev.matmul3_bwd(&l.qh, &l.kt, &l.dscores, &l.dqh, &l.dkt, bh, s, dh, s)?;
             self.dev.transpose3(&l.dkt, &l.dkh, bh, dh, s)?;
-            self.dev.split_heads_rev(&l.dqh, &l.dq, self.cfg.batch, h, s, dh)?;
-            self.dev.split_heads_rev(&l.dkh, &l.dk, self.cfg.batch, h, s, dh)?;
-            self.dev.split_heads_rev(&l.dvh, &l.dv, self.cfg.batch, h, s, dh)?;
+            self.dev.split_heads(&l.dqh, &l.dq, self.cfg.batch, h, s, dh)?;
+            self.dev.split_heads(&l.dkh, &l.dk, self.cfg.batch, h, s, dh)?;
+            self.dev.split_heads(&l.dvh, &l.dv, self.cfg.batch, h, s, dh)?;
             self.dev.matmul_batch_bwd(&l.wq, &l.xn1, &l.dq, &l.dwq, &l.dxn1, n, d, d)?;
             self.dev.matmul_batch_bwd(&l.wk, &l.xn1, &l.dk, &l.dwk, &l.dxn1k, n, d, d)?;
             self.dev.matmul_batch_bwd(&l.wv, &l.xn1, &l.dv, &l.dwv, &l.dxn1v, n, d, d)?;

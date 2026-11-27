@@ -27,7 +27,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut rng = 0xB0FEu64;
     let mut running = 0f64;
     let started = Instant::now();
-    let steps = 5000usize;
+    let steps: usize = std::env::var("CORTEX_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(5000);
     for step in 1..=steps {
         rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         let start = (rng as usize) % (ids.len() - n - 1);
