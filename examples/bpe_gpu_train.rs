@@ -17,9 +17,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("encoded {} tokens, avg {:.2} bytes/token, compression {:.2}x",
              ids.len(), avg_bytes, bytes.len() as f64 / ids.len() as f64);
 
+    let lr: f32 = std::env::var("CORTEX_LR").ok().and_then(|v| v.parse().ok()).unwrap_or(5e-5);
     let cfg = GpuConfig {
         vocab: bpe.vocab(), dim: 128, layers: 6, heads: 4, hidden: 512,
-        seq: 32, batch: 32, seed: 99, lr: 5e-5,
+        seq: 32, batch: 32, seed: 99, lr,
     };
     let n = cfg.batch * cfg.seq;
     let mut model = GpuTransformer::new(Cuda::new()?, cfg)?;
@@ -38,8 +39,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let loss = running / 250.0;
             running = 0.0;
             let bits = loss / std::f64::consts::LN_2 / avg_bytes;
-            println!("step {step:>5}/{steps} loss {loss:.4}  {bits:.3} bits/byte  lr {:?}",
-                     std::env::var("CORTEX_LR").ok());
+            println!("step {step:>5}/{steps} loss {loss:.4}  {bits:.3} bits/byte  lr {lr:.1e}");
         }
     }
     let prompt = bpe.encode(b"def ");
