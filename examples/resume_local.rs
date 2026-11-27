@@ -27,6 +27,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let mut rng = 0xC0FFEEu64;
     let mut running = 0f32;
+    let started = std::time::Instant::now();
     for step in 1..=steps {
         rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         let start = (rng as usize) % (all.len() - n - 1);
@@ -35,8 +36,21 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let loss = model.train_batch(&ids, &targets)?;
         running += loss;
         if step % 50 == 0 {
-            println!("step {step:>5} avg_loss {:.4}", running / 250.0);
+            let avg = running / 50.0;
             running = 0.0;
+            let elapsed = started.elapsed().as_secs_f64();
+            let eta = elapsed / step as f64 * (steps - step) as f64;
+            let pct = 100.0 * step as f64 / steps as f64;
+            let temp = cortex_train::thermal::gpu_temp_c()
+                .map(|t| format!("{t}C")).unwrap_or_else(|| "n/a".into());
+            println!("step {step:>6}/{steps} ({pct:5.1}%) avg_loss {avg:.4} elapsed {:.1}m eta {:.1}m gpu {temp}",
+                     elapsed / 60.0, eta / 60.0);
+            let status = format!(
+                "{{\"step\":{},\"total\":{},\"loss\":{},\"elapsed_s\":{},\"eta_s\":{},\"temp_c\":{}}}",
+                step, steps, avg, elapsed as u64, eta as u64,
+                cortex_train::thermal::gpu_temp_c().unwrap_or(0),
+            );
+            let _ = std::fs::write("/tmp/cortex-train-status.json", status);
         }
     }
 
