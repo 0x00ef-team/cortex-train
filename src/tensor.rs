@@ -36,6 +36,7 @@ pub struct Tensor {
 thread_local! {
     static NEXT_ID: std::cell::Cell<usize> = const { std::cell::Cell::new(1) };
     static TAPE: RefCell<Vec<Edge>> = const { RefCell::new(Vec::new()) };
+    static TAPE_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 struct Edge {
@@ -98,7 +99,7 @@ impl Tensor {
     pub fn view(&self, f: impl FnOnce(&Data)) { f(&*self.data.borrow()) }
 
     fn record(&self, inputs: Vec<Tensor>, backward: impl Fn(&[f32], &mut [Vec<f32>]) + 'static) {
-        if self.requires_grad {
+        if self.requires_grad && !TAPE_OFF.with(|c| c.get()) {
             TAPE.with(|t| t.borrow_mut().push(Edge {
                 output: self.clone(),
                 inputs,
@@ -134,6 +135,48 @@ impl Tensor {
                 for (dst, src) in d.grad.iter_mut().zip(g) { *dst += src; }
             }
         }
+    }
+}
+
+impl Tensor {
+    /// Recompute-based activation checkpointing.
+    ///
+    /// The forward pass runs with the tape disabled, so intermediate
+    /// activations are not kept. On backward the same closure is re-run on
+    /// cloned inputs and its gradients are copied back. Memory is reduced at
+    /// the cost of one extra forward per checkpointed region.
+    pub fn checkpoint(
+        inputs: &[Tensor],
+        f: impl Fn(&[Tensor]) -> Tensor + 'static,
+    ) -> Tensor {
+        TAPE_OFF.with(|c| c.set(true));
+        let out = f(inputs);
+        TAPE_OFF.with(|c| c.set(false));
+        let mut out = out;
+        out.requires_grad = inputs.iter().any(|t| t.requires_grad);
+        let f = std::rc::Rc::new(f);
+        let input_list = inputs.to_vec();
+        TAPE.with(|t| t.borrow_mut().push(Edge {
+            output: out.clone(),
+            inputs: input_list.clone(),
+            backward: Box::new(move |dy, grads| {
+                TAPE.with(|t| t.borrow_mut().clear());
+                let local: Vec<Tensor> = input_list.iter().map(|t| {
+                    Tensor::parameter(t.values(), &t.shape())
+                }).collect();
+                let tmp = f(&local);
+                {
+                    let mut d = tmp.data.borrow_mut();
+                    d.grad = dy.to_vec();
+                }
+                tmp.backward();
+                for (src, dst) in local.iter().zip(grads.iter_mut()) {
+                    *dst = src.grad();
+                }
+                TAPE.with(|t| t.borrow_mut().clear());
+            }),
+        }));
+        out
     }
 }
 
