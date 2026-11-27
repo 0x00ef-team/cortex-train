@@ -8,6 +8,7 @@
 pub mod arch;
 pub mod checkpoint;
 pub mod cuda;
+pub mod cuda_model;
 pub mod corpus;
 pub mod data;
 pub mod distributed;
@@ -22,6 +23,7 @@ pub use optim::{AdamW, RMSProp, SGD};
 pub use tensor::Tensor;
 pub use arch::{preset, CortexAiPreset, CORTEX_AI_120M, CORTEX_AI_1B, CORTEX_AI_300M, CORTEX_AI_8M};
 pub use corpus::Corpus;
+pub use cuda_model::{GpuConfig, GpuTransformer};
 pub use data::{Dataset, DataLoader};
 pub use f16::{f32_to_half, half_to_f32};
 pub use loss::{binary_cross_entropy, mse};

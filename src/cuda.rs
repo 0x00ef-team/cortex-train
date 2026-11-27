@@ -622,10 +622,17 @@ fn check(code: i32, what: &str) -> std::result::Result<(), Error> {
     else { Err(Error { msg: format!("{what}: CUDA error {code}") }) }
 }
 
+struct DevGuard { ptr: u64, api: Rc<Api> }
+impl Drop for DevGuard {
+    fn drop(&mut self) { unsafe { (self.api.mem_free)(self.ptr); } }
+}
+
+#[derive(Clone)]
 pub struct DeviceTensor {
     ptr: u64,
     pub len: usize,
     api: Rc<Api>,
+    guard: Rc<DevGuard>,
 }
 
 impl DeviceTensor {
@@ -644,7 +651,7 @@ impl DeviceTensor {
     pub fn zeros(dev: &Cuda, len: usize) -> std::result::Result<Self, Error> {
         let mut ptr = 0u64;
         unsafe { check((dev.api.mem_alloc)(&mut ptr, len * 4), "cuMemAlloc")?; }
-        Ok(Self { ptr, len, api: dev.api.clone() })
+        Ok(Self { ptr, len, guard: Rc::new(DevGuard { ptr, api: dev.api.clone() }), api: dev.api.clone() })
     }
 
     pub fn copy_from(&self, data: &[f32]) -> std::result::Result<(), Error> {
@@ -652,15 +659,15 @@ impl DeviceTensor {
         unsafe { check((self.api.h2d)(self.ptr, data.as_ptr() as *const c_void, data.len() * 4), "HtoD") }
     }
 
+    pub fn share(&self) -> Self { self.clone() }
+
+    pub fn values(&self) -> std::result::Result<Vec<f32>, Error> { self.to_vec() }
+
     pub fn to_vec(&self) -> std::result::Result<Vec<f32>, Error> {
         let mut out = vec![0f32; self.len];
         unsafe { check((self.api.d2h)(out.as_mut_ptr() as *mut c_void, self.ptr, self.len * 4), "DtoH")?; }
         Ok(out)
     }
-}
-
-impl Drop for DeviceTensor {
-    fn drop(&mut self) { unsafe { (self.api.mem_free)(self.ptr); } }
 }
 
 fn launch(api: &Api, func: u64, grid: u32, block: u32, params: &mut [*mut c_void]) -> std::result::Result<(), Error> {

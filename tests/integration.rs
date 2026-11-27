@@ -1,3 +1,4 @@
+use cortex_train::distributed::Local;
 use cortex_train::{binary_cross_entropy, checkpoint, mse, AdamW, DataLoader, Dataset, RMSProp, SGD, Tensor, Transformer};
 
 #[test]
@@ -65,4 +66,13 @@ fn checkpoint_roundtrip() {
         assert_eq!(loaded[name].values(), t.values());
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn optimizer_with_reducer() {
+    let target = Tensor::new(vec![0.0], &[1]);
+    let x = Tensor::parameter(vec![2.0], &[1]);
+    let mut opt = AdamW::new(vec![x.clone()], 0.1).with_reducer(Box::new(Local));
+    for _ in 0..100 { opt.zero_grad(); mse(&x, &target).backward(); opt.step(); }
+    assert!(x.values()[0].abs() < 0.1);
 }

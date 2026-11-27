@@ -80,6 +80,9 @@ checkpoint round-trip.
 cargo run --release --example cuda_train
 # step  40 loss 0.306073
 # step 200 loss 0.000000
+
+cargo run --release --example cuda_transformer_multi
+# step  10 loss 3.0293  ->  step 80 loss 1.3990
 ```
 
 It trains `y = W·x` entirely on device with compiled backward kernels.
