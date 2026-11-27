@@ -13,10 +13,12 @@ pub mod corpus;
 pub mod data;
 pub mod distributed;
 pub mod f16;
+pub mod gguf_export;
 pub mod loss;
 pub mod nn;
 pub mod optim;
 pub mod tensor;
+pub mod thermal;
 
 pub use nn::{CausalAttention, Embedding, Linear, RMSNorm, Transformer, TransformerBlock};
 pub use optim::{AdamW, RMSProp, SGD};
@@ -26,4 +28,5 @@ pub use corpus::Corpus;
 pub use cuda_model::{GpuConfig, GpuTransformer};
 pub use data::{Dataset, DataLoader};
 pub use f16::{f32_to_half, half_to_f32};
+pub use gguf_export::{export as export_gguf, ExportOptions};
 pub use loss::{binary_cross_entropy, mse};

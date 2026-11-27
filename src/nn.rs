@@ -66,6 +66,9 @@ pub struct CausalAttention {
 }
 
 impl CausalAttention {
+    pub fn heads(&self) -> usize { self.heads }
+    pub fn dim(&self) -> usize { self.dim }
+
     pub fn new(dim: usize, heads: usize, seed: u64) -> Self {
         assert_eq!(dim % heads, 0);
         Self {
@@ -155,6 +158,12 @@ pub struct Transformer {
 }
 
 impl Transformer {
+    pub fn dim(&self) -> usize { self.embed.weight.shape()[1] }
+    pub fn vocab(&self) -> usize { self.embed.weight.shape()[0] }
+    pub fn layers(&self) -> usize { self.blocks.len() }
+    pub fn heads(&self) -> usize { self.blocks.first().map(|b| b.attn.heads()).unwrap_or(1) }
+    pub fn hidden(&self) -> usize { self.blocks.first().map(|b| b.gate.weight.shape()[1]).unwrap_or(0) }
+
     pub fn new(vocab: usize, dim: usize, layers: usize, heads: usize, hidden: usize, seed: u64) -> Self {
         let mut blocks = Vec::with_capacity(layers);
         for i in 0..layers { blocks.push(TransformerBlock::new(dim, heads, hidden, seed + 100 * i as u64)); }

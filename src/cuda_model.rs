@@ -69,6 +69,7 @@ pub struct GpuTransformer {
     loss: DeviceTensor,
     opt: Vec<Adam>,
     step: usize,
+    max_temp: Option<u32>,
 }
 
 fn rand_init(rng: &mut u64, rows: usize, cols: usize, scale: f32) -> Vec<f32> {
@@ -150,7 +151,7 @@ impl GpuTransformer {
         add(&wh, &dwh, &mut opt)?;
 
         Ok(Self { dev, cfg, n, bh, dh, embed, dembed, layers, nf, dnf, invf, xf, dxf, dxf_out,
-                  wh, dwh, logits, dlogits, loss, opt, step: 0 })
+                  wh, dwh, logits, dlogits, loss, opt, step: 0, max_temp: None })
     }
 
     pub fn forward(&mut self, ids: &[i32], targets: &[i32]) -> Result<f32, crate::cuda::Error> {
@@ -250,11 +251,17 @@ impl GpuTransformer {
         for a in &self.opt {
             self.dev.adamw(&a.p, &a.g, &a.m, &a.v, self.cfg.lr, 0.0, 0.9, 0.999, 1e-8, c1, c2)?;
         }
+        if let Some(max_c) = self.max_temp {
+            crate::thermal::throttle_if_hot(max_c, self.step, 10);
+        }
         let _ = (scale, v);
         Ok(loss)
     }
     /// Copy all parameters to host with stable names and write a `CTRK1`
     /// checkpoint that the CPU autograd model can also load.
+    /// Keep the GPU at or below this temperature by duty-cycling the loop.
+    pub fn set_max_temp(&mut self, max_c: u32) { self.max_temp = Some(max_c); }
+
     pub fn save_checkpoint(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         use crate::checkpoint;
         use crate::Tensor;
@@ -280,6 +287,40 @@ impl GpuTransformer {
         add("final_norm".into(), &self.nf, &mut named)?;
         add("head.weight".into(), &self.wh, &mut named)?;
         checkpoint::save(path, &named)
+    }
+
+
+    /// Restore weights from a local `CTRK1` checkpoint, matching the names
+    /// written by `save_checkpoint`. Optimizer state starts fresh.
+    pub fn load_checkpoint(
+        &mut self, path: impl AsRef<std::path::Path>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::checkpoint;
+        let map = checkpoint::load(path)?;
+        let copy = |name: &str, t: &DeviceTensor, map: &std::collections::HashMap<String, crate::Tensor>| -> Result<(), Box<dyn std::error::Error>> {
+            let values = map.get(name).ok_or_else(|| format!("missing checkpoint tensor {name}"))?.values();
+            if values.len() != t.len {
+                return Err(format!("shape mismatch for {name}: {} vs {}", values.len(), t.len).into());
+            }
+            t.copy_from(&values)?;
+            Ok(())
+        };
+        copy("embed.weight", &self.embed, &map)?;
+        for (i, l) in self.layers.iter().enumerate() {
+            let n = |s: &str| format!("blocks.{i}.{s}");
+            copy(&n("attn_norm"), &l.n1, &map)?;
+            copy(&n("wq"), &l.wq, &map)?;
+            copy(&n("wk"), &l.wk, &map)?;
+            copy(&n("wv"), &l.wv, &map)?;
+            copy(&n("wo"), &l.wo, &map)?;
+            copy(&n("ffn_norm"), &l.n2, &map)?;
+            copy(&n("gate"), &l.wg, &map)?;
+            copy(&n("up"), &l.wu, &map)?;
+            copy(&n("down"), &l.wd, &map)?;
+        }
+        copy("final_norm", &self.nf, &map)?;
+        copy("head.weight", &self.wh, &map)?;
+        Ok(())
     }
 
     /// Greedy generation on device. Logits are copied to host only for argmax.

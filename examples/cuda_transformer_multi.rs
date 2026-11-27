@@ -22,6 +22,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (_ids0, _targets0) = window(0);
 
     let mut model = GpuTransformer::new(Cuda::new()?, cfg)?;
+    model.set_max_temp(75); // never let the GPU reach 79C
     for step in 1..=2000 {
         rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         let start = (rng as usize) % (all.len() - n - 1);

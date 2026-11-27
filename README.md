@@ -110,9 +110,12 @@ more data and more steps.
 
 - [x] CUDA device layer: NVRTC kernels for matmul forward/backward, MSE
       forward/backward and AdamW; `examples/cuda_train` trains a layer on GPU
-- [ ] GGUF export so trained weights can be loaded directly by `cortex`
+- [x] GGUF export: `export_gguf(path, model, ExportOptions)` writes an F32
+      LLaMA-style GGUF that `cortex` loads and generates from
 - [x] MSE/BCE, SGD/RMSProp, data loaders, checkpoint save/load
-- [ ] CUDA autograd backend is still future work
+- [x] CUDA training backend: explicit forward/backward kernels for MLP and
+      multi-layer transformer (`GpuTransformer`), AdamW, gradient clipping,
+      thermal guard. The CPU tape and GPU device layer remain separate APIs.
 
 ## License
 
@@ -164,8 +167,25 @@ cargo test
 
 ### Планы
 
-- CUDA-автодиф (переиспользовать CUDA-ядра `cortex`)
-- экспорт в GGUF, чтобы обученную модель грузил `cortex`
+- [x] CUDA-обучение: явные ядра forward/backward для MLP и многослойного
+      трансформера, AdamW, клиппинг градиентов, thermal guard
+- [x] экспорт в GGUF: `export_gguf(...)` пишет F32-файл, который грузит `cortex`
 - MSE/BCE, SGD/RMSProp, загрузчики данных, чекпоинты
 
 Лицензия: MIT OR Apache-2.0.
+
+## GGUF export
+
+```rust
+use cortex_train::{export_gguf, ExportOptions, Transformer};
+
+let model = Transformer::new(32, 16, 2, 4, 32, 7);
+let tokens: Vec<Vec<u8>> = /* one byte-string per vocab id */;
+export_gguf("/tmp/model.gguf", &model, ExportOptions {
+    tokens: &tokens, context: 128, name: "my-model",
+})?;
+```
+
+Verified: `cortex/examples/info` reads the file and `cortex/examples/generate`
+produces tokens from it. Learned positional embeddings are preserved by using
+a very large RoPE base (rotation becomes identity).
