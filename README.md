@@ -82,7 +82,8 @@ cargo run --release --example cuda_train
 # step 200 loss 0.000000
 
 cargo run --release --example cuda_transformer_multi
-# step  10 loss 3.0293  ->  step 80 loss 1.3990
+# trains on datasets/code.txt (The Stack smol-xs subset)
+# step  10 loss 5.2018  ->  step 80 loss 3.3268
 ```
 
 It trains `y = W·x` entirely on device with compiled backward kernels.
