@@ -82,9 +82,19 @@ cargo run --release --example cuda_train
 # step 200 loss 0.000000
 ```
 
-It trains `y = W·x` entirely on device with compiled backward kernels. This is
-the foundation for the full transformer CUDA autograd; softmax/attention
-backward kernels are still to come.
+It trains `y = W·x` entirely on device with compiled backward kernels.
+
+`examples/cuda_transformer_train` goes further: one full decoder block
+(embedding, RMSNorm, causal attention, SwiGLU FFN, residuals, output head)
+trains end-to-end on GPU:
+
+```bash
+cargo run --release --example cuda_transformer_train
+# step  10 loss 3.0442  ->  step 100 loss 0.8151
+```
+
+All backward passes (attention, softmax, RMSNorm, SiLU, embedding) are
+compiled CUDA kernels.
 
 ## Roadmap
 

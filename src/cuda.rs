@@ -239,6 +239,226 @@ extern "C" __global__ void ce_bwd(
     drow[target[i]] -= 1.f / (float)n;
 }
 
+
+extern "C" __global__ void matmul3_fwd(
+    const float* __restrict__ A, const float* __restrict__ Bm,
+    float* __restrict__ C, int batches, int m, int k, int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batches*m*n;
+    if (idx >= total) return;
+    int bi = idx/(m*n), r = (idx/n)%m, c = idx%n;
+    float s = 0.f;
+    for (int i=0; i<k; ++i) s += A[(bi*m+r)*k+i] * Bm[(bi*k+i)*n+c];
+    C[idx] = s;
+}
+
+extern "C" __global__ void matmul3_bwd_a(
+    const float* __restrict__ Bm, const float* __restrict__ dC,
+    float* __restrict__ dA, int batches, int m, int k, int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batches*m*k;
+    if (idx >= total) return;
+    int bi = idx/(m*k), r = (idx/k)%m, i = idx%k;
+    float s = 0.f;
+    for (int c=0; c<n; ++c) s += dC[(bi*m+r)*n+c] * Bm[(bi*k+i)*n+c];
+    dA[idx] = s;
+}
+
+extern "C" __global__ void matmul3_bwd_b(
+    const float* __restrict__ A, const float* __restrict__ dC,
+    float* __restrict__ dB, int batches, int m, int k, int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batches*k*n;
+    if (idx >= total) return;
+    int bi = idx/(k*n), i=(idx/n)%k, c=idx%n;
+    float s=0.f;
+    for (int r=0;r<m;++r) s += A[(bi*m+r)*k+i] * dC[(bi*m+r)*n+c];
+    dB[idx]=s;
+}
+
+extern "C" __global__ void softmax_rows_fwd(
+    const float* __restrict__ x, float* __restrict__ y, int rows, int cols)
+{
+    int r = blockIdx.x;
+    if (r >= rows) return;
+    const float* row = x + (size_t)r*cols;
+    float* out = y + (size_t)r*cols;
+    float mx = row[0];
+    for (int j=1;j<cols;++j) mx = fmaxf(mx,row[j]);
+    float sum=0.f;
+    for (int j=0;j<cols;++j) { out[j]=expf(row[j]-mx); sum+=out[j]; }
+    for (int j=0;j<cols;++j) out[j]/=sum;
+}
+
+extern "C" __global__ void softmax_rows_bwd(
+    const float* __restrict__ probs, const float* __restrict__ dy,
+    float* __restrict__ dx, int rows, int cols)
+{
+    int r = blockIdx.x;
+    if (r >= rows) return;
+    const float* p = probs + (size_t)r*cols;
+    const float* g = dy + (size_t)r*cols;
+    float* out = dx + (size_t)r*cols;
+    float dot=0.f;
+    for (int j=0;j<cols;++j) dot += g[j]*p[j];
+    for (int j=0;j<cols;++j) out[j] = p[j]*(g[j]-dot);
+}
+
+extern "C" __global__ void causal_softmax_fwd(
+    const float* __restrict__ scores, float* __restrict__ probs,
+    int rows, int cols)
+{
+    int r = blockIdx.x;
+    if (r >= rows) return;
+    int i = r % cols;
+    const float* s = scores + (size_t)r*cols;
+    float out[128];
+    float mx = -1e30f;
+    for (int j=0;j<cols;++j) {
+        float v = (j > i) ? -1e9f : s[j];
+        out[j]=v; if (v>mx) mx=v;
+    }
+    float sum=0.f;
+    for (int j=0;j<cols;++j) { out[j]=expf(out[j]-mx); sum+=out[j]; }
+    float* p = probs + (size_t)r*cols;
+    for (int j=0;j<cols;++j) p[j]=out[j]/sum;
+}
+
+extern "C" __global__ void rmsnorm_fwd(
+    const float* __restrict__ x, const float* __restrict__ w,
+    float* __restrict__ y, float* __restrict__ inv, int rows, int d, const float* eps_p)
+{
+    int r=blockIdx.x;
+    if (r>=rows) return;
+    const float* xr=x+(size_t)r*d;
+    float ms=0.f;
+    for (int j=0;j<d;++j) ms+=xr[j]*xr[j];
+    float scale=1.f/sqrtf(ms/(float)d+*eps_p);
+    inv[r]=scale;
+    float* yr=y+(size_t)r*d;
+    for (int j=0;j<d;++j) yr[j]=xr[j]*scale*w[j];
+}
+
+extern "C" __global__ void rmsnorm_bwd(
+    const float* __restrict__ x, const float* __restrict__ w,
+    const float* __restrict__ inv, const float* __restrict__ dy,
+    float* __restrict__ dx, float* __restrict__ dw, int rows, int d)
+{
+    int j=blockIdx.x*blockDim.x+threadIdx.x;
+    if (j>=d) return;
+    float gw=0.f;
+    for (int r=0;r<rows;++r) gw += dy[r*d+j]*x[r*d+j]*inv[r];
+    dw[j]=gw/(float)rows;
+    for (int r=0;r<rows;++r) {
+        float dot=0.f;
+        for (int k=0;k<d;++k) dot += x[r*d+k]*w[k]*dy[r*d+k];
+        dx[r*d+j] = w[j]*inv[r]*dy[r*d+j] - inv[r]*inv[r]*inv[r]/(float)d*x[r*d+j]*dot;
+    }
+}
+
+extern "C" __global__ void embedding_fwd(
+    const float* __restrict__ table, const int* __restrict__ ids,
+    float* __restrict__ out, int n, int d)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) {
+        int id=ids[i];
+        for (int j=0;j<d;++j) out[i*d+j]=table[id*d+j];
+    }
+}
+
+extern "C" __global__ void embedding_bwd(
+    const float* __restrict__ dy, const int* __restrict__ ids,
+    float* __restrict__ dtable, int n, int d)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) {
+        int id=ids[i];
+        for (int j=0;j<d;++j) atomicAdd(&dtable[id*d+j], dy[i*d+j]);
+    }
+}
+
+extern "C" __global__ void add_fwd(
+    const float* __restrict__ a, const float* __restrict__ b,
+    float* __restrict__ y, int n)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) y[i]=a[i]+b[i];
+}
+
+extern "C" __global__ void head_split(
+    const float* __restrict__ qk, float* __restrict__ out,
+    int b, int h, int s, int d)
+{
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    int total=b*h*s*d;
+    if (idx>=total) return;
+    int bi=idx/(h*s*d), hh=(idx/(s*d))%h, i=(idx/d)%s, j=idx%d;
+    out[(bi*s+i)*(h*d)+hh*d+j]=qk[idx];
+}
+
+
+extern "C" __global__ void transpose3(
+    const float* __restrict__ x, float* __restrict__ y, int batches, int m, int n)
+{
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    int total=batches*m*n;
+    if (idx>=total) return;
+    int bi=idx/(m*n), r=(idx/n)%m, c=idx%n;
+    y[(bi*n+c)*m+r]=x[idx];
+}
+
+extern "C" __global__ void split_heads_rev(
+    const float* __restrict__ x, float* __restrict__ out,
+    int b, int h, int s, int d)
+{
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    int total=b*s*h*d;
+    if (idx>=total) return;
+    int bi=idx/(s*h*d), i=(idx/(h*d))%s, hh=(idx/d)%h, j=idx%d;
+    out[((bi*h+hh)*s+i)*d+j]=x[idx];
+}
+
+extern "C" __global__ void mul_fwd(
+    const float* __restrict__ a, const float* __restrict__ b,
+    float* __restrict__ y, int n)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) y[i]=a[i]*b[i];
+}
+
+extern "C" __global__ void mul_bwd(
+    const float* __restrict__ a, const float* __restrict__ b,
+    const float* __restrict__ dy, float* __restrict__ da,
+    float* __restrict__ db, int n)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) { da[i]=dy[i]*b[i]; db[i]=dy[i]*a[i]; }
+}
+
+extern "C" __global__ void add_into(
+    float* __restrict__ a, const float* __restrict__ b, int n)
+{
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if (i<n) a[i]+=b[i];
+}
+
+extern "C" __global__ void attn_scores(
+    const float* __restrict__ q, const float* __restrict__ kt,
+    float* __restrict__ scores, int batches, int s, int d, float scale)
+{
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    int total=batches*s*s;
+    if (idx>=total) return;
+    int bi=idx/(s*s), r=(idx/s)%s, c=idx%s;
+    float sum=0.f;
+    for (int i=0;i<d;++i) sum+=q[(bi*s+r)*d+i]*kt[(bi*d+i)*s+c];
+    scores[idx]=sum*scale;
+}
+
 extern "C" __global__ void adamw_step(
     float* __restrict__ p, float* __restrict__ g,
     float* __restrict__ m, float* __restrict__ v,
@@ -288,6 +508,11 @@ struct Api {
     silu_bwd: u64,
     ce_fwd: u64,
     ce_bwd: u64,
+    m3_fwd: u64, m3_ba: u64, m3_bb: u64,
+    softmax_fwd: u64, softmax_bwd: u64, causal_softmax: u64,
+    rms_fwd: u64, rms_bwd: u64,
+    emb_fwd: u64, emb_bwd: u64, add_fwd: u64, head_split: u64,
+    transpose3: u64, split_heads_rev: u64, mul_fwd: u64, mul_bwd: u64, add_into: u64, scores: u64,
 }
 
 pub struct Cuda {
@@ -367,6 +592,24 @@ impl Cuda {
                 silu_bwd: fn_handle("silu_bwd")?,
                 ce_fwd: fn_handle("ce_fwd")?,
                 ce_bwd: fn_handle("ce_bwd")?,
+                m3_fwd: fn_handle("matmul3_fwd")?,
+                m3_ba: fn_handle("matmul3_bwd_a")?,
+                m3_bb: fn_handle("matmul3_bwd_b")?,
+                softmax_fwd: fn_handle("softmax_rows_fwd")?,
+                softmax_bwd: fn_handle("softmax_rows_bwd")?,
+                causal_softmax: fn_handle("causal_softmax_fwd")?,
+                rms_fwd: fn_handle("rmsnorm_fwd")?,
+                rms_bwd: fn_handle("rmsnorm_bwd")?,
+                emb_fwd: fn_handle("embedding_fwd")?,
+                emb_bwd: fn_handle("embedding_bwd")?,
+                add_fwd: fn_handle("add_fwd")?,
+                head_split: fn_handle("head_split")?,
+                transpose3: fn_handle("transpose3")?,
+                split_heads_rev: fn_handle("split_heads_rev")?,
+                mul_fwd: fn_handle("mul_fwd")?,
+                mul_bwd: fn_handle("mul_bwd")?,
+                add_into: fn_handle("add_into")?,
+                scores: fn_handle("attn_scores")?,
             }) })
         }
     }
@@ -565,6 +808,121 @@ impl Cuda {
             &dlogits.ptr as *const u64 as *mut c_void, &nn as *const i32 as *mut c_void, &cc as *const i32 as *mut c_void,
         ];
         launch(&self.api, self.api.ce_bwd, n as u32, 128, &mut p)
+    }
+    pub fn matmul3_fwd(&self, a:&DeviceTensor, b:&DeviceTensor, c:&DeviceTensor,
+                       batches:usize, m:usize, k:usize, n:usize) -> std::result::Result<(),Error> {
+        let (bb,mm,kk,nn)=(batches as i32,m as i32,k as i32,n as i32);
+        let mut p:[*mut c_void;7]=[&a.ptr as *const u64 as *mut c_void,&b.ptr as *const u64 as *mut c_void,
+            &c.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&mm as *const i32 as *mut c_void,
+            &kk as *const i32 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.m3_fwd,(batches*m*n).div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn matmul3_bwd(&self, a:&DeviceTensor, b:&DeviceTensor, dc:&DeviceTensor,
+                       da:&DeviceTensor, db:&DeviceTensor, batches:usize,m:usize,k:usize,n:usize) -> std::result::Result<(),Error> {
+        let (bb,mm,kk,nn)=(batches as i32,m as i32,k as i32,n as i32);
+        let mut p:[*mut c_void;7]=[&b.ptr as *const u64 as *mut c_void,&dc.ptr as *const u64 as *mut c_void,
+            &da.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&mm as *const i32 as *mut c_void,
+            &kk as *const i32 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.m3_ba,(batches*m*k).div_ceil(256) as u32,256,&mut p)?;
+        let mut p2:[*mut c_void;7]=[&a.ptr as *const u64 as *mut c_void,&dc.ptr as *const u64 as *mut c_void,
+            &db.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&mm as *const i32 as *mut c_void,
+            &kk as *const i32 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.m3_bb,(batches*k*n).div_ceil(256) as u32,256,&mut p2)
+    }
+    pub fn softmax_rows(&self,x:&DeviceTensor,y:&DeviceTensor,rows:usize,cols:usize,backward:bool,
+                        dy:Option<&DeviceTensor>,dx:Option<&DeviceTensor>) -> std::result::Result<(),Error> {
+        let (rr,cc)=(rows as i32,cols as i32);
+        if !backward {
+            let mut p:[*mut c_void;4]=[&x.ptr as *const u64 as *mut c_void,&y.ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,&cc as *const i32 as *mut c_void];
+            launch(&self.api,self.api.softmax_fwd,rows as u32,1,&mut p)
+        } else {
+            let mut p:[*mut c_void;5]=[&x.ptr as *const u64 as *mut c_void,&dy.unwrap().ptr as *const u64 as *mut c_void,
+                &dx.unwrap().ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,&cc as *const i32 as *mut c_void];
+            launch(&self.api,self.api.softmax_bwd,rows as u32,1,&mut p)
+        }
+    }
+    pub fn causal_softmax(&self,scores:&DeviceTensor,probs:&DeviceTensor,rows:usize,cols:usize) -> std::result::Result<(),Error> {
+        let (rr,cc)=(rows as i32,cols as i32);
+        let mut p:[*mut c_void;4]=[&scores.ptr as *const u64 as *mut c_void,&probs.ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,&cc as *const i32 as *mut c_void];
+        launch(&self.api,self.api.causal_softmax,rows as u32,1,&mut p)
+    }
+    pub fn rms_norm(&self,x:&DeviceTensor,w:&DeviceTensor,y:&DeviceTensor,inv:&DeviceTensor,
+                    rows:usize,d:usize,eps:f32) -> std::result::Result<(),Error> {
+        let (rr,dd)=(rows as i32,d as i32);
+        let p:[*mut c_void;6]=[&x.ptr as *const u64 as *mut c_void,&w.ptr as *const u64 as *mut c_void,
+            &y.ptr as *const u64 as *mut c_void,&inv.ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,
+            &dd as *const i32 as *mut c_void];
+        // eps passed as f32 bits through a tiny device scalar
+        let eps_dev=DeviceTensor::from_slice(self,&[eps])?;
+        let mut p2:[*mut c_void;7]=[&x.ptr as *const u64 as *mut c_void,&w.ptr as *const u64 as *mut c_void,
+            &y.ptr as *const u64 as *mut c_void,&inv.ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,
+            &dd as *const i32 as *mut c_void,&eps_dev.ptr as *const u64 as *mut c_void];
+        let _=p;
+        launch(&self.api,self.api.rms_fwd,rows as u32,1,&mut p2)
+    }
+    pub fn rms_norm_bwd(&self,x:&DeviceTensor,w:&DeviceTensor,inv:&DeviceTensor,dy:&DeviceTensor,
+                        dx:&DeviceTensor,dw:&DeviceTensor,rows:usize,d:usize) -> std::result::Result<(),Error> {
+        let (rr,dd)=(rows as i32,d as i32);
+        let mut p:[*mut c_void;8]=[&x.ptr as *const u64 as *mut c_void,&w.ptr as *const u64 as *mut c_void,
+            &inv.ptr as *const u64 as *mut c_void,&dy.ptr as *const u64 as *mut c_void,&dx.ptr as *const u64 as *mut c_void,
+            &dw.ptr as *const u64 as *mut c_void,&rr as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+        launch(&self.api,self.api.rms_bwd,d.div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn embedding(&self,table:&DeviceTensor,ids:&DeviceTensor,out:&DeviceTensor,n:usize,d:usize,
+                     dtable:Option<&DeviceTensor>) -> std::result::Result<(),Error> {
+        let (nn,dd)=(n as i32,d as i32);
+        if let Some(dt)=dtable {
+            let mut p:[*mut c_void;5]=[&out.ptr as *const u64 as *mut c_void,&ids.ptr as *const u64 as *mut c_void,
+                &dt.ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+            return launch(&self.api,self.api.emb_bwd,n.div_ceil(64) as u32,64,&mut p);
+        }
+        let mut p:[*mut c_void;5]=[&table.ptr as *const u64 as *mut c_void,&ids.ptr as *const u64 as *mut c_void,
+            &out.ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+        launch(&self.api,self.api.emb_fwd,n.div_ceil(64) as u32,64,&mut p)
+    }
+    pub fn add(&self,a:&DeviceTensor,b:&DeviceTensor,y:&DeviceTensor,n:usize) -> std::result::Result<(),Error> {
+        let nn=n as i32;
+        let mut p:[*mut c_void;4]=[&a.ptr as *const u64 as *mut c_void,&b.ptr as *const u64 as *mut c_void,
+            &y.ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.add_fwd,n.div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn split_heads(&self,qkv:&DeviceTensor,out:&DeviceTensor,b:usize,h:usize,s:usize,d:usize) -> std::result::Result<(),Error> {
+        let (bb,hh,ss,dd)=(b as i32,h as i32,s as i32,d as i32);
+        let mut p:[*mut c_void;6]=[&qkv.ptr as *const u64 as *mut c_void,&out.ptr as *const u64 as *mut c_void,
+            &bb as *const i32 as *mut c_void,&hh as *const i32 as *mut c_void,&ss as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+        launch(&self.api,self.api.head_split,(b*h*s*d).div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn transpose3(&self,x:&DeviceTensor,y:&DeviceTensor,batches:usize,m:usize,n:usize) -> std::result::Result<(),Error> {
+        let (bb,mm,nn)=(batches as i32,m as i32,n as i32);
+        let mut p:[*mut c_void;5]=[&x.ptr as *const u64 as *mut c_void,&y.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&mm as *const i32 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.transpose3,(batches*m*n).div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn split_heads_rev(&self,x:&DeviceTensor,out:&DeviceTensor,b:usize,h:usize,s:usize,d:usize) -> std::result::Result<(),Error> {
+        let (bb,hh,ss,dd)=(b as i32,h as i32,s as i32,d as i32);
+        let mut p:[*mut c_void;6]=[&x.ptr as *const u64 as *mut c_void,&out.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&hh as *const i32 as *mut c_void,&ss as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void];
+        launch(&self.api,self.api.split_heads_rev,(b*s*h*d).div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn mul(&self,a:&DeviceTensor,b:&DeviceTensor,y:&DeviceTensor,n:usize,backward:bool,
+               dy:Option<&DeviceTensor>,da:Option<&DeviceTensor>,db:Option<&DeviceTensor>) -> std::result::Result<(),Error> {
+        let nn=n as i32;
+        if !backward {
+            let mut p:[*mut c_void;4]=[&a.ptr as *const u64 as *mut c_void,&b.ptr as *const u64 as *mut c_void,&y.ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void];
+            launch(&self.api,self.api.mul_fwd,n.div_ceil(256) as u32,256,&mut p)
+        } else {
+            let mut p:[*mut c_void;6]=[&a.ptr as *const u64 as *mut c_void,&b.ptr as *const u64 as *mut c_void,&dy.unwrap().ptr as *const u64 as *mut c_void,&da.unwrap().ptr as *const u64 as *mut c_void,&db.unwrap().ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void];
+            launch(&self.api,self.api.mul_bwd,n.div_ceil(256) as u32,256,&mut p)
+        }
+    }
+    pub fn add_into(&self,a:&DeviceTensor,b:&DeviceTensor,n:usize) -> std::result::Result<(),Error> {
+        let nn=n as i32;
+        let mut p:[*mut c_void;3]=[&a.ptr as *const u64 as *mut c_void,&b.ptr as *const u64 as *mut c_void,&nn as *const i32 as *mut c_void];
+        launch(&self.api,self.api.add_into,n.div_ceil(256) as u32,256,&mut p)
+    }
+    pub fn attn_scores(&self,q:&DeviceTensor,kt:&DeviceTensor,scores:&DeviceTensor,
+                       batches:usize,s:usize,d:usize,scale:f32) -> std::result::Result<(),Error> {
+        let (bb,ss,dd)=(batches as i32,s as i32,d as i32);
+        let mut p:[*mut c_void;7]=[&q.ptr as *const u64 as *mut c_void,&kt.ptr as *const u64 as *mut c_void,&scores.ptr as *const u64 as *mut c_void,&bb as *const i32 as *mut c_void,&ss as *const i32 as *mut c_void,&dd as *const i32 as *mut c_void,&scale as *const f32 as *mut c_void];
+        launch(&self.api,self.api.scores,(batches*s*s).div_ceil(256) as u32,256,&mut p)
     }
 }
 
