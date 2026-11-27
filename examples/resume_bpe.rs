@@ -11,7 +11,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let path = PathBuf::from(args.first().cloned().unwrap_or_else(|| "/tmp/cortex-bpe-model.ctrk".into()));
     let steps: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(50000);
-    let lr: f32 = std::env::var("CORTEX_LR").ok().and_then(|v| v.parse().ok()).unwrap_or(1e-5);
+    let lr: f32 = std::env::var("CORTEX_LR").ok().and_then(|v| v.parse().ok()).unwrap_or(5e-6);
 
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/datasets/code.txt"))?;
     let bpe = Bpe::train(&bytes, 1_000_000, 1024);
@@ -48,9 +48,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 best_loss = loss;
                 model.save_checkpoint(&best_path)?;
                 bad = 0;
-            } else if loss > best_loss * 1.3 {
+            } else if loss > best_loss * 1.1 {
                 bad += 1;
-                if bad >= 3 {
+                if bad >= 2 {
                     eprintln!("[rollback] loss {loss:.3} > best {best_loss:.3}");
                     model.load_checkpoint(&best_path)?;
                     model.reset_optimizer()?;
