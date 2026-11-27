@@ -18,11 +18,13 @@ pub mod loss;
 pub mod nn;
 pub mod optim;
 pub mod tensor;
+pub mod tokenizer;
 pub mod thermal;
 
 pub use nn::{CausalAttention, Embedding, Linear, RMSNorm, Transformer, TransformerBlock};
 pub use optim::{AdamW, RMSProp, SGD};
 pub use tensor::Tensor;
+pub use tokenizer::Bpe;
 pub use arch::{preset, CortexAiPreset, CORTEX_AI_120M, CORTEX_AI_1B, CORTEX_AI_300M, CORTEX_AI_8M};
 pub use corpus::Corpus;
 pub use cuda_model::{GpuConfig, GpuTransformer};

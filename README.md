@@ -21,7 +21,8 @@ This repository is attached to `cortex-llm` as a git submodule at
   heads / hidden size).
 - Losses: cross-entropy, MSE, binary cross-entropy.
 - Optimizers: AdamW (decoupled weight decay), SGD+momentum, RMSProp.
-- Data: `Dataset` (next-token windows), `DataLoader` (deterministic shuffling).
+- Data: `Dataset` (next-token windows), `DataLoader` (deterministic shuffling),
+  `Bpe` (locally trained byte-BPE tokenizer).
 - Checkpoints: named tensor save/load (`CTRK1` binary format).
 - Greedy and temperature sampling.
 
@@ -110,6 +111,8 @@ more data and more steps.
 
 - [x] CUDA device layer: NVRTC kernels for matmul forward/backward, MSE
       forward/backward and AdamW; `examples/cuda_train` trains a layer on GPU
+- [x] BPE tokenizer trained locally from the corpus (GPU example uses subword
+      tokens instead of raw bytes)
 - [x] GGUF export: `export_gguf(path, model, ExportOptions)` writes an F32
       LLaMA-style GGUF that `cortex` loads and generates from
 - [x] MSE/BCE, SGD/RMSProp, data loaders, checkpoint save/load
@@ -189,3 +192,10 @@ export_gguf("/tmp/model.gguf", &model, ExportOptions {
 Verified: `cortex/examples/info` reads the file and `cortex/examples/generate`
 produces tokens from it. Learned positional embeddings are preserved by using
 a very large RoPE base (rotation becomes identity).
+
+## BPE tokenizer
+
+`Bpe::train(&corpus, sample_bytes, merges)` learns `256 + merges` subword
+tokens; `encode`/`decode` use a trie. `examples/bpe_gpu_train` trains the GPU
+transformer on these tokens and reports loss in **bits per byte**, which is
+comparable across byte-level and BPE-level models. Nothing is uploaded.

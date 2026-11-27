@@ -28,6 +28,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut rng = 0xC0FFEEu64;
     let mut running = 0f32;
     let started = std::time::Instant::now();
+    let best_path = path.with_extension("best.ctrk");
+    let mut best_loss = f32::INFINITY;
+    let mut bad_windows = 0usize;
+    let mut current_lr = lr;
     for step in 1..=steps {
         rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         let start = (rng as usize) % (all.len() - n - 1);
@@ -38,12 +42,29 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         if step % 50 == 0 {
             let avg = running / 50.0;
             running = 0.0;
+            if avg < best_loss {
+                best_loss = avg;
+                model.save_checkpoint(&best_path)?;
+                bad_windows = 0;
+            } else if avg > best_loss * 1.25 {
+                bad_windows += 1;
+                if bad_windows >= 3 {
+                    eprintln!("[rollback] loss {avg:.3} > best {best_loss:.3}; restoring best weights");
+                    model.load_checkpoint(&best_path)?;
+                    model.reset_optimizer()?;
+                    current_lr = (current_lr * 0.5).max(1e-6);
+                    model.set_lr(current_lr);
+                    bad_windows = 0;
+                }
+            } else {
+                bad_windows = 0;
+            }
             let elapsed = started.elapsed().as_secs_f64();
             let eta = elapsed / step as f64 * (steps - step) as f64;
             let pct = 100.0 * step as f64 / steps as f64;
             let temp = cortex_train::thermal::gpu_temp_c()
                 .map(|t| format!("{t}C")).unwrap_or_else(|| "n/a".into());
-            println!("step {step:>6}/{steps} ({pct:5.1}%) avg_loss {avg:.4} elapsed {:.1}m eta {:.1}m gpu {temp}",
+            println!("step {step:>6}/{steps} ({pct:5.1}%) avg_loss {avg:.4} best {best_loss:.4} lr {current_lr:.1e} elapsed {:.1}m eta {:.1}m gpu {temp}",
                      elapsed / 60.0, eta / 60.0);
             let status = format!(
                 "{{\"step\":{},\"total\":{},\"loss\":{},\"elapsed_s\":{},\"eta_s\":{},\"temp_c\":{}}}",

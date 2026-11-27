@@ -259,6 +259,18 @@ impl GpuTransformer {
     }
     /// Copy all parameters to host with stable names and write a `CTRK1`
     /// checkpoint that the CPU autograd model can also load.
+    pub fn set_lr(&mut self, lr: f32) { self.cfg.lr = lr; }
+
+    /// Clear Adam moments (used when rolling back to a best checkpoint).
+    pub fn reset_optimizer(&mut self) -> Result<(), crate::cuda::Error> {
+        for a in &self.opt {
+            a.m.copy_from(&vec![0f32; a.m.len])?;
+            a.v.copy_from(&vec![0f32; a.v.len])?;
+        }
+        self.step = 0;
+        Ok(())
+    }
+
     /// Keep the GPU at or below this temperature by duty-cycling the loop.
     pub fn set_max_temp(&mut self, max_c: u32) { self.max_temp = Some(max_c); }
 
