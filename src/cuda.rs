@@ -468,6 +468,8 @@ extern "C" __global__ void adamw_step(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float gr = g[i];
+    // Per-element gradient clip: keeps unstable batches from destroying the model.
+    gr = fmaxf(-1.f, fminf(1.f, gr));
     m[i] = b1 * m[i] + (1.f - b1) * gr;
     v[i] = b2 * v[i] + (1.f - b2) * gr * gr;
     p[i] -= lr * (m[i] / c1) / (sqrtf(v[i] / c2) + eps) + lr * wd * p[i];

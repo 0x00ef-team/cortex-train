@@ -83,7 +83,8 @@ cargo run --release --example cuda_train
 
 cargo run --release --example cuda_transformer_multi
 # trains on datasets/code.txt (The Stack smol-xs subset)
-# step  10 loss 5.2018  ->  step 80 loss 3.3268
+# 6-layer / dim 128 model on real code, lr 5e-5:
+# step 250 loss 4.20 -> step 2000 loss ~3.4-4.4 (batch loss varies)
 ```
 
 It trains `y = W·x` entirely on device with compiled backward kernels.
@@ -98,7 +99,12 @@ cargo run --release --example cuda_transformer_train
 ```
 
 All backward passes (attention, softmax, RMSNorm, SiLU, embedding) are
-compiled CUDA kernels.
+compiled CUDA kernels. `save_checkpoint` exports host-readable `CTRK1` weights.
+
+Honest note: a 1.5M-parameter model trained for ~2000 short windows on 10 MB of
+code learns token statistics but does not yet generate useful code — greedy
+sampling degenerates to whitespace. Scaling needs more layers, longer context,
+more data and more steps.
 
 ## Roadmap
 

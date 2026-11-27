@@ -32,7 +32,7 @@ struct Layer {
     // forward activations
     x: DeviceTensor, xn1: DeviceTensor, qh: DeviceTensor, kh: DeviceTensor,
     vh: DeviceTensor, kt: DeviceTensor, scores: DeviceTensor, probs: DeviceTensor,
-    o: DeviceTensor, oh: DeviceTensor, a1: DeviceTensor, gate: DeviceTensor,
+    o: DeviceTensor, oh: DeviceTensor, a1: DeviceTensor, gate_raw: DeviceTensor, gate: DeviceTensor,
     up: DeviceTensor, act: DeviceTensor, xn2: DeviceTensor,
     // gradients
     dx: DeviceTensor, dxn1: DeviceTensor, dxn1k: DeviceTensor, dxn1v: DeviceTensor,
@@ -123,7 +123,7 @@ impl GpuTransformer {
                 qh: z(bh*cfg.seq*dh)?, kh: z(bh*cfg.seq*dh)?, vh: z(bh*cfg.seq*dh)?,
                 kt: z(bh*dh*cfg.seq)?, scores: z(bh*cfg.seq*cfg.seq)?, probs: z(bh*cfg.seq*cfg.seq)?,
                 o: z(bh*cfg.seq*dh)?, oh: z(n*cfg.dim)?, a1: z(n*cfg.dim)?,
-                gate: z(n*cfg.hidden)?, up: z(n*cfg.hidden)?, act: z(n*cfg.hidden)?, xn2: z(n*cfg.dim)?,
+                gate_raw: z(n*cfg.hidden)?, gate: z(n*cfg.hidden)?, up: z(n*cfg.hidden)?, act: z(n*cfg.hidden)?, xn2: z(n*cfg.dim)?,
                 dx: z(n*cfg.dim)?, dxn1: z(n*cfg.dim)?, dxn1k: z(n*cfg.dim)?, dxn1v: z(n*cfg.dim)?,
                 dqh: z(bh*cfg.seq*dh)?, dkh: z(bh*cfg.seq*dh)?, dvh: z(bh*cfg.seq*dh)?, dkt: z(bh*dh*cfg.seq)?,
                 dscores: z(bh*cfg.seq*cfg.seq)?, dprobs: z(bh*cfg.seq*cfg.seq)?,
@@ -182,9 +182,9 @@ impl GpuTransformer {
             self.dev.add(prev, &l.dx1, &l.a1, n*d)?;
 
             self.dev.rms_norm(&l.a1, &l.n2, &l.xn2, &l.inv2, n, d, 1e-5)?;
-            self.dev.matmul_batch_fwd(&l.wg, &l.xn2, &l.gate, n, ff, d)?;
+            self.dev.matmul_batch_fwd(&l.wg, &l.xn2, &l.gate_raw, n, ff, d)?;
             self.dev.matmul_batch_fwd(&l.wu, &l.xn2, &l.up, n, ff, d)?;
-            self.dev.silu(&l.gate, &l.gate, false, None, None)?;
+            self.dev.silu(&l.gate_raw, &l.gate, false, None, None)?;
             self.dev.mul(&l.gate, &l.up, &l.act, n*ff, false, None, None, None)?;
             self.dev.matmul_batch_fwd(&l.wd, &l.act, &l.dx2, n, d, ff)?;
             self.dev.add(&l.a1, &l.dx2, &l.x, n*d)?;
@@ -217,7 +217,7 @@ impl GpuTransformer {
             // `dxf` currently carries grad wrt this layer's output `x`.
             self.dev.matmul_batch_bwd(&l.wd, &l.act, &self.dxf, &l.dwd, &l.ddown, n, d, ff)?;
             self.dev.mul(&l.gate, &l.up, &l.dact, n*ff, true, Some(&l.ddown), Some(&l.dgate), Some(&l.dup))?;
-            self.dev.silu(&l.gate, &l.dgate, true, Some(&l.dgate), Some(&l.dgate))?;
+            self.dev.silu(&l.gate_raw, &l.dgate, true, Some(&l.dgate), Some(&l.dgate))?;
             self.dev.matmul_batch_bwd(&l.wg, &l.xn2, &l.dgate, &l.dwg, &l.dxn2, n, ff, d)?;
             self.dev.matmul_batch_bwd(&l.wu, &l.xn2, &l.dup, &l.dwu, &l.dxn2u, n, ff, d)?;
             self.dev.add_into(&l.dxn2, &l.dxn2u, n*d)?;
@@ -253,4 +253,51 @@ impl GpuTransformer {
         let _ = (scale, v);
         Ok(loss)
     }
+    /// Copy all parameters to host with stable names and write a `CTRK1`
+    /// checkpoint that the CPU autograd model can also load.
+    pub fn save_checkpoint(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        use crate::checkpoint;
+        use crate::Tensor;
+        let mut named: Vec<(String, Tensor)> = Vec::new();
+        let add = |name: String, t: &DeviceTensor, out: &mut Vec<(String, Tensor)>| -> std::io::Result<()> {
+            let v = t.to_vec().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            out.push((name, Tensor::parameter(v, &[t.len])));
+            Ok(())
+        };
+        add("embed.weight".into(), &self.embed, &mut named)?;
+        for (i, l) in self.layers.iter().enumerate() {
+            let n = |s: &str| format!("blocks.{i}.{s}");
+            add(n("attn_norm"), &l.n1, &mut named)?;
+            add(n("wq"), &l.wq, &mut named)?;
+            add(n("wk"), &l.wk, &mut named)?;
+            add(n("wv"), &l.wv, &mut named)?;
+            add(n("wo"), &l.wo, &mut named)?;
+            add(n("ffn_norm"), &l.n2, &mut named)?;
+            add(n("gate"), &l.wg, &mut named)?;
+            add(n("up"), &l.wu, &mut named)?;
+            add(n("down"), &l.wd, &mut named)?;
+        }
+        add("final_norm".into(), &self.nf, &mut named)?;
+        add("head.weight".into(), &self.wh, &mut named)?;
+        checkpoint::save(path, &named)
+    }
+
+    /// Greedy generation on device. Logits are copied to host only for argmax.
+    pub fn generate(&mut self, prompt: &[i32], steps: usize) -> Result<Vec<i32>, crate::cuda::Error> {
+        let mut ids = prompt.to_vec();
+        let dummy_targets = vec![0i32; self.n];
+        for _ in 0..steps {
+            let mut window = ids.clone();
+            window.resize(self.n, 0);
+            self.forward(&window, &dummy_targets)?;
+            let logits = self.logits.to_vec()?;
+            let c = self.cfg.vocab;
+            let last = &logits[(self.n - 1) * c..self.n * c];
+            let mut best = 0usize;
+            for i in 1..c { if last[i] > last[best] { best = i; } }
+            ids.push(best as i32);
+        }
+        Ok(ids)
+    }
 }
+
